@@ -214,6 +214,24 @@ function Get-ProcessSampleKey {
     return "$ProcessId|$StartTimeTicks"
 }
 
+function Test-ShouldSweepLogRetention {
+    <#
+    True whenever the log date has changed since the last check - including
+    the very first check, where $CurrentLogDate is $null. That inclusion
+    matters: a version of this check that skipped a $null CurrentLogDate
+    meant retention never ran on a fresh start unless the process happened
+    to survive past midnight, so CSVs accumulated forever on any box that
+    restarts the monitor daily.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][Nullable[datetime]]$CurrentLogDate,
+        [Parameter(Mandatory)][datetime]$Today
+    )
+
+    return $CurrentLogDate -ne $Today
+}
+
 function Get-LogFilesToPurge {
     <#
     Selects log files older than RetentionDays for deletion. RetentionDays -le 0

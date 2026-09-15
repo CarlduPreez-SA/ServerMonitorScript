@@ -134,6 +134,21 @@ Describe 'Get-ProcessSampleKey (PID reuse handling)' {
     }
 }
 
+Describe 'Test-ShouldSweepLogRetention' {
+    It 'is true on the very first check, where CurrentLogDate is $null' {
+        Test-ShouldSweepLogRetention -CurrentLogDate $null -Today (Get-Date '2026-09-15') | Should -Be $true
+    }
+
+    It 'is false when the date has not changed' {
+        $today = Get-Date '2026-09-15'
+        Test-ShouldSweepLogRetention -CurrentLogDate $today -Today $today | Should -Be $false
+    }
+
+    It 'is true once the date has rolled over' {
+        Test-ShouldSweepLogRetention -CurrentLogDate (Get-Date '2026-09-14') -Today (Get-Date '2026-09-15') | Should -Be $true
+    }
+}
+
 Describe 'Get-LogFilesToPurge' {
     It 'selects only files older than the retention window' {
         $now = Get-Date '2026-09-15T00:00:00'

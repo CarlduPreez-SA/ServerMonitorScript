@@ -144,11 +144,11 @@ function Update-LogFiles {
         }
     }
 
-    # Only sweep for retention when the date actually rolls over, not every cycle.
-    if ($script:CurrentLogDate -ne $today) {
-        if ($script:CurrentLogDate) {
-            Invoke-LogRetention -OutputFolderResolved $OutputFolderResolved -LogFilePrefix $LogFilePrefix -RetentionDays $RetentionDays
-        }
+    # Sweep for retention on the date's first check (including startup, where
+    # CurrentLogDate is still $null) and again on each later rollover - not
+    # every cycle.
+    if (Test-ShouldSweepLogRetention -CurrentLogDate $script:CurrentLogDate -Today $today) {
+        Invoke-LogRetention -OutputFolderResolved $OutputFolderResolved -LogFilePrefix $LogFilePrefix -RetentionDays $RetentionDays
         $script:CurrentLogDate = $today
     }
 
