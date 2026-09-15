@@ -11,6 +11,11 @@ param(
 
 . (Join-Path $PSScriptRoot 'ServerMonitor.Common.ps1')
 
+# Single-instance guard: "Global\" makes this apply across all sessions, so a
+# scheduled-task run and a manual interactive run can't both append to the
+# same CSV at once and interleave rows.
+$script:Mutex = New-Object System.Threading.Mutex($false, 'Global\ServerMonitorScript')
+
 function Get-Settings {
     param([string]$Path)
 
@@ -212,53 +217,72 @@ function Get-TopProcessSamples {
     return $combined.Values
 }
 
-Write-Host "Server monitor starting. Config: $ConfigPath"
+try {
+    $acquired = $script:Mutex.WaitOne(0)
+}
+catch [System.Threading.AbandonedMutexException] {
+    # A previous instance crashed while holding the mutex. We now own it - proceed normally.
+    $acquired = $true
+}
 
-$stopwatch = [System.Diagnostics.Stopwatch]::new()
+if (-not $acquired) {
+    Write-Warning 'Another instance of Monitor-Server.ps1 is already running (mutex held). Exiting.'
+    exit 1
+}
 
-while ($true) {
-    $stopwatch.Restart()
+try {
+    Write-Host "Server monitor starting. Config: $ConfigPath"
 
-    try {
-        $settings = Get-Settings -Path $ConfigPath
-        $outputFolder = Resolve-OutputFolder -OutputFolder $settings.OutputFolder
-        $logFile = Update-LogFiles -OutputFolderResolved $outputFolder -LogFilePrefix $settings.LogFilePrefix -RetentionDays $settings.RetentionDays
+    $stopwatch = [System.Diagnostics.Stopwatch]::new()
 
-        $sampleTime = Get-Date
-        $timestamp = $sampleTime.ToString('yyyy-MM-ddTHH:mm:ss')
+    while ($true) {
+        $stopwatch.Restart()
 
-        $sysSample = Get-SystemSample
-        $topProcesses = Get-TopProcessSamples -TopN ([int]$settings.TopNProcesses) -TotalMemoryMB $sysSample.TotalMemoryMB -SampleTime $sampleTime
+        try {
+            $settings = Get-Settings -Path $ConfigPath
+            $outputFolder = Resolve-OutputFolder -OutputFolder $settings.OutputFolder
+            $logFile = Update-LogFiles -OutputFolderResolved $outputFolder -LogFilePrefix $settings.LogFilePrefix -RetentionDays $settings.RetentionDays
 
-        # Batch the cycle's rows into one write instead of opening/closing the
-        # file handle once per row.
-        $rows = New-Object System.Collections.Generic.List[string]
-        $rows.Add((ConvertTo-CsvLine -Fields @(
-            $timestamp, 'System', '', '',
-            $sysSample.CPUPercent, $sysSample.MemoryUsedMB, $sysSample.MemoryUsedPct, $sysSample.TotalMemoryMB
-        )))
-        foreach ($p in $topProcesses) {
+            $sampleTime = Get-Date
+            $timestamp = $sampleTime.ToString('yyyy-MM-ddTHH:mm:ss')
+
+            $sysSample = Get-SystemSample
+            $topProcesses = Get-TopProcessSamples -TopN ([int]$settings.TopNProcesses) -TotalMemoryMB $sysSample.TotalMemoryMB -SampleTime $sampleTime
+
+            # Batch the cycle's rows into one write instead of opening/closing the
+            # file handle once per row.
+            $rows = New-Object System.Collections.Generic.List[string]
             $rows.Add((ConvertTo-CsvLine -Fields @(
-                $timestamp, 'Process', $p.ProcessName, $p.ProcessId,
-                $p.CPUPercent, $p.MemoryMB, $p.MemoryPercent, ''
+                $timestamp, 'System', '', '',
+                $sysSample.CPUPercent, $sysSample.MemoryUsedMB, $sysSample.MemoryUsedPct, $sysSample.TotalMemoryMB
             )))
+            foreach ($p in $topProcesses) {
+                $rows.Add((ConvertTo-CsvLine -Fields @(
+                    $timestamp, 'Process', $p.ProcessName, $p.ProcessId,
+                    $p.CPUPercent, $p.MemoryMB, $p.MemoryPercent, ''
+                )))
+            }
+            Add-Content -LiteralPath $logFile -Value $rows -Encoding UTF8
         }
-        Add-Content -LiteralPath $logFile -Value $rows -Encoding UTF8
-    }
-    catch {
-        Write-Warning "Sample cycle failed: $_"
-    }
+        catch {
+            Write-Warning "Sample cycle failed: $_"
+        }
 
-    # Sleep only what's left of the interval after the cycle's own work, so the
-    # real cadence is IntervalSeconds rather than IntervalSeconds + execution time.
-    $elapsed = $stopwatch.Elapsed.TotalSeconds
-    $intervalSeconds = if ($settings) { [int]$settings.IntervalSeconds } else { 15 }
-    $remaining = $intervalSeconds - $elapsed
+        # Sleep only what's left of the interval after the cycle's own work, so the
+        # real cadence is IntervalSeconds rather than IntervalSeconds + execution time.
+        $elapsed = $stopwatch.Elapsed.TotalSeconds
+        $intervalSeconds = if ($settings) { [int]$settings.IntervalSeconds } else { 15 }
+        $remaining = $intervalSeconds - $elapsed
 
-    if ($remaining -le 0) {
-        Write-Warning "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
+        if ($remaining -le 0) {
+            Write-Warning "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
+        }
+        else {
+            Start-Sleep -Seconds $remaining
+        }
     }
-    else {
-        Start-Sleep -Seconds $remaining
-    }
+}
+finally {
+    $script:Mutex.ReleaseMutex()
+    $script:Mutex.Dispose()
 }
