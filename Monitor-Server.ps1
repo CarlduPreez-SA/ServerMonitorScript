@@ -20,6 +20,8 @@ $EventLogSource = 'ServerMonitorScript'
 $EventLogName = 'Application'
 $EventIdCpuAlert = 1001
 $EventIdMemoryAlert = 1002
+$EventIdCpuRecovery = 1003
+$EventIdMemoryRecovery = 1004
 
 $script:LogFilePath = $null
 
@@ -216,9 +218,12 @@ $script:PreviousProcessCpu = @{}
 $script:PreviousSystemRaw = $null
 $script:PreviousSampleTime = $null
 
-# Sustained-breach tracking for alerting (avoid firing on a single noisy sample).
+# Sustained-breach tracking for alerting (avoid firing on a single noisy sample),
+# plus whether an alert is currently "active" so a later recovery fires exactly once.
 $script:ConsecutiveCpuBreaches = 0
 $script:ConsecutiveMemoryBreaches = 0
+$script:CpuAlertActive = $false
+$script:MemoryAlertActive = $false
 $script:EventLogAvailable = $null
 
 function Test-EventLogAvailable {
@@ -243,7 +248,10 @@ function Invoke-AlertCheck {
     Fires a single warning-level Application event log entry (and log-file
     entry) once CPU or memory has stayed at or above its threshold for
     $AlertSustainedSamples consecutive samples, rather than on every cycle a
-    single noisy sample happens to breach it.
+    single noisy sample happens to breach it. Also fires a single
+    information-level "recovered" event once the metric drops back below
+    threshold, so a box pinned at 100% for hours doesn't produce one alert
+    and silence - there's a matching all-clear.
     #>
     param(
         [double]$CpuPercent,
@@ -253,7 +261,20 @@ function Invoke-AlertCheck {
     )
 
     if ($CpuAlertPercent) {
-        if ($CpuPercent -ge $CpuAlertPercent) { $script:ConsecutiveCpuBreaches++ } else { $script:ConsecutiveCpuBreaches = 0 }
+        if ($CpuPercent -ge $CpuAlertPercent) {
+            $script:ConsecutiveCpuBreaches++
+        }
+        else {
+            if ($script:CpuAlertActive) {
+                $msg = "CPU back under threshold: $CpuPercent% (threshold $CpuAlertPercent%)."
+                Write-Log -Level INFO -Message $msg
+                if (Test-EventLogAvailable) {
+                    Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdCpuRecovery -EntryType Information -Message $msg
+                }
+                $script:CpuAlertActive = $false
+            }
+            $script:ConsecutiveCpuBreaches = 0
+        }
 
         if ($script:ConsecutiveCpuBreaches -eq $AlertSustainedSamples) {
             $msg = "Sustained high CPU: $CpuPercent% over the last $AlertSustainedSamples samples (threshold $CpuAlertPercent%)."
@@ -261,11 +282,25 @@ function Invoke-AlertCheck {
             if (Test-EventLogAvailable) {
                 Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdCpuAlert -EntryType Warning -Message $msg
             }
+            $script:CpuAlertActive = $true
         }
     }
 
     if ($MemoryAlertPercent) {
-        if ($MemoryPercent -ge $MemoryAlertPercent) { $script:ConsecutiveMemoryBreaches++ } else { $script:ConsecutiveMemoryBreaches = 0 }
+        if ($MemoryPercent -ge $MemoryAlertPercent) {
+            $script:ConsecutiveMemoryBreaches++
+        }
+        else {
+            if ($script:MemoryAlertActive) {
+                $msg = "Memory back under threshold: $MemoryPercent% (threshold $MemoryAlertPercent%)."
+                Write-Log -Level INFO -Message $msg
+                if (Test-EventLogAvailable) {
+                    Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdMemoryRecovery -EntryType Information -Message $msg
+                }
+                $script:MemoryAlertActive = $false
+            }
+            $script:ConsecutiveMemoryBreaches = 0
+        }
 
         if ($script:ConsecutiveMemoryBreaches -eq $AlertSustainedSamples) {
             $msg = "Sustained high memory: $MemoryPercent% over the last $AlertSustainedSamples samples (threshold $MemoryAlertPercent%)."
@@ -273,6 +308,7 @@ function Invoke-AlertCheck {
             if (Test-EventLogAvailable) {
                 Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdMemoryAlert -EntryType Warning -Message $msg
             }
+            $script:MemoryAlertActive = $true
         }
     }
 }

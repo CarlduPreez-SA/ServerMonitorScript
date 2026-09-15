@@ -100,8 +100,10 @@ otherwise undeletable file is logged and skipped rather than stopping the monito
 Set `CpuAlertPercent` and/or `MemoryAlertPercent` (0–100) to get a warning-level entry in
 the Windows **Application** event log (source `ServerMonitorScript`, event ID `1001` for
 CPU / `1002` for memory) when the corresponding metric stays at or above the threshold for
-3 consecutive samples. This is a single sustained-breach notification, not a fire-every-cycle
-alarm, and not a substitute for real alerting/paging — see "When not to use this" below.
+3 consecutive samples, and a matching information-level "recovered" entry (event ID `1003`
+CPU / `1004` memory) the next time it drops back below threshold. Each fires exactly once
+per breach — not a fire-every-cycle alarm, and not a substitute for real alerting/paging —
+see "When not to use this" below.
 
 Creating the event log source requires admin rights once; if that fails (e.g. desktop mode,
 non-elevated), alerts still land in `<LogFilePrefix>.log` but skip the event log.
