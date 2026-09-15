@@ -16,11 +16,44 @@ param(
 # same CSV at once and interleave rows.
 $script:Mutex = New-Object System.Threading.Mutex($false, 'Global\ServerMonitorScript')
 
+$MaxConsecutiveFailures = 10
+
+$script:LogFilePath = $null
+
+function Write-Log {
+    <#
+    Logs to both the console and <LogFilePrefix>.log in OutputFolder. The
+    console alone isn't enough: the scheduled task runs with a hidden window,
+    so Write-Warning/Write-Host never reach anyone unless it's also on disk.
+    #>
+    param(
+        [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO',
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    $line = "$(Get-Date -Format 'yyyy-MM-ddTHH:mm:ss') [$Level] $Message"
+
+    switch ($Level) {
+        'ERROR' { Write-Error $Message -ErrorAction Continue }
+        'WARN' { Write-Warning $Message }
+        default { Write-Host $line }
+    }
+
+    if ($script:LogFilePath) {
+        try {
+            Add-Content -LiteralPath $script:LogFilePath -Value $line -Encoding UTF8
+        }
+        catch {
+            # Best-effort: if the log file itself can't be written, still let the caller proceed.
+        }
+    }
+}
+
 function Get-Settings {
     param([string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path)) {
-        Write-Warning "Config file not found at '$Path'. Using default settings."
+        Write-Log -Level WARN -Message "Config file not found at '$Path'. Using default settings."
         return (Get-DefaultSettings)
     }
 
@@ -28,12 +61,12 @@ function Get-Settings {
         $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
         $validated = ConvertTo-ValidatedSettings -RawSettings $raw
         foreach ($w in $validated.Warnings) {
-            Write-Warning "Config: $w"
+            Write-Log -Level WARN -Message "Config: $w"
         }
         return $validated.Settings
     }
     catch {
-        Write-Warning "Failed to parse config file '$Path': $_. Using default settings."
+        Write-Log -Level WARN -Message "Failed to parse config file '$Path': $_. Using default settings."
         return (Get-DefaultSettings)
     }
 }
@@ -67,6 +100,7 @@ function Update-LogFiles {
     $today = (Get-Date).Date
     $dateStamp = $today.ToString('yyyy-MM-dd')
     $csvPath = Join-Path $OutputFolderResolved "${LogFilePrefix}_${dateStamp}.csv"
+    $script:LogFilePath = Join-Path $OutputFolderResolved "$LogFilePrefix.log"
 
     if (-not (Test-Path -LiteralPath $csvPath)) {
         Set-Content -LiteralPath $csvPath -Value $CsvHeader -Encoding UTF8
@@ -99,15 +133,15 @@ function Invoke-LogRetention {
         foreach ($file in $toDelete) {
             try {
                 Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
-                Write-Host "Deleted expired log '$($file.Name)' (older than $RetentionDays days)."
+                Write-Log -Level INFO -Message "Deleted expired log '$($file.Name)' (older than $RetentionDays days)."
             }
             catch {
-                Write-Warning "Could not delete expired log '$($file.Name)': $_"
+                Write-Log -Level WARN -Message "Could not delete expired log '$($file.Name)': $_"
             }
         }
     }
     catch {
-        Write-Warning "Log retention sweep failed: $_"
+        Write-Log -Level WARN -Message "Log retention sweep failed: $_"
     }
 }
 
@@ -226,13 +260,14 @@ catch [System.Threading.AbandonedMutexException] {
 }
 
 if (-not $acquired) {
-    Write-Warning 'Another instance of Monitor-Server.ps1 is already running (mutex held). Exiting.'
+    Write-Log -Level ERROR -Message 'Another instance of Monitor-Server.ps1 is already running (mutex held). Exiting.'
     exit 1
 }
 
 try {
-    Write-Host "Server monitor starting. Config: $ConfigPath"
+    Write-Log -Level INFO -Message "Server monitor starting. Config: $ConfigPath"
 
+    $consecutiveFailures = 0
     $stopwatch = [System.Diagnostics.Stopwatch]::new()
 
     while ($true) {
@@ -263,9 +298,17 @@ try {
                 )))
             }
             Add-Content -LiteralPath $logFile -Value $rows -Encoding UTF8
+
+            $consecutiveFailures = 0
         }
         catch {
-            Write-Warning "Sample cycle failed: $_"
+            $consecutiveFailures++
+            Write-Log -Level WARN -Message "Sample cycle failed ($consecutiveFailures/$MaxConsecutiveFailures consecutive): $_"
+
+            if ($consecutiveFailures -ge $MaxConsecutiveFailures) {
+                Write-Log -Level ERROR -Message "Giving up after $MaxConsecutiveFailures consecutive failed cycles."
+                exit 1
+            }
         }
 
         # Sleep only what's left of the interval after the cycle's own work, so the
@@ -275,7 +318,7 @@ try {
         $remaining = $intervalSeconds - $elapsed
 
         if ($remaining -le 0) {
-            Write-Warning "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
+            Write-Log -Level WARN -Message "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
         }
         else {
             Start-Sleep -Seconds $remaining

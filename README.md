@@ -57,8 +57,18 @@ from `Get-Process`) — so they're directly comparable. **The first sample after
 starts always reports `0`** for every `CPUPercent`, since there's no prior sample to diff
 against.
 
+A `<OutputFolder>\<LogFilePrefix>.log` file also accumulates warnings/errors (config
+problems, failed cycles, retention deletions) — useful since the scheduled task runs with
+a hidden window and nothing goes to a visible console.
+
 ## Log retention
 
 On each day's first sample, the monitor deletes CSV files older than `RetentionDays` in
 `OutputFolder`. Set `RetentionDays` to `0` to keep every file forever. A locked or
 otherwise undeletable file is logged and skipped rather than stopping the monitor.
+
+## Failure handling
+
+A failed sample cycle (WMI hiccup, transient error) is logged and the loop continues. After
+10 consecutive failed cycles, the monitor logs a terminal error and exits non-zero, so a
+scheduled task's restart policy takes over instead of spinning silently forever.
