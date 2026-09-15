@@ -17,6 +17,7 @@ per-process CPU/RAM usage, writing structured rows to a date-rotated CSV file.
 | `OutputFolder`    | Folder for CSV logs. Relative paths resolve against the script dir. | `.\Logs`       |
 | `TopNProcesses`   | Number of top processes by CPU and by RAM logged per sample.        | `10`           |
 | `LogFilePrefix`   | Prefix for daily CSV file names (`<Prefix>_yyyy-MM-dd.csv`).         | `ServerMonitor`|
+| `RetentionDays`   | Delete CSV files older than this many days on each date rollover. `0` = keep forever. | `14` |
 
 ## Running manually
 
@@ -55,3 +56,9 @@ sample interval (system: idle-time delta from raw perf counters; process: CPU-se
 from `Get-Process`) — so they're directly comparable. **The first sample after the monitor
 starts always reports `0`** for every `CPUPercent`, since there's no prior sample to diff
 against.
+
+## Log retention
+
+On each day's first sample, the monitor deletes CSV files older than `RetentionDays` in
+`OutputFolder`. Set `RetentionDays` to `0` to keep every file forever. A locked or
+otherwise undeletable file is logged and skipped rather than stopping the monitor.

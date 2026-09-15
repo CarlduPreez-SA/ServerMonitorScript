@@ -50,21 +50,60 @@ function Resolve-OutputFolder {
 
 $CsvHeader = 'Timestamp,MetricType,ProcessName,ProcessId,CPUPercent,MemoryMB,MemoryPercent,TotalMemoryMB'
 
-function Get-CurrentLogFile {
+$script:CurrentLogDate = $null
+
+function Update-LogFiles {
     param(
         [string]$OutputFolderResolved,
-        [string]$LogFilePrefix
+        [string]$LogFilePrefix,
+        [int]$RetentionDays
     )
 
-    $dateStamp = Get-Date -Format 'yyyy-MM-dd'
-    $fileName = "${LogFilePrefix}_${dateStamp}.csv"
-    $filePath = Join-Path $OutputFolderResolved $fileName
+    $today = (Get-Date).Date
+    $dateStamp = $today.ToString('yyyy-MM-dd')
+    $csvPath = Join-Path $OutputFolderResolved "${LogFilePrefix}_${dateStamp}.csv"
 
-    if (-not (Test-Path -LiteralPath $filePath)) {
-        Set-Content -LiteralPath $filePath -Value $CsvHeader -Encoding UTF8
+    if (-not (Test-Path -LiteralPath $csvPath)) {
+        Set-Content -LiteralPath $csvPath -Value $CsvHeader -Encoding UTF8
     }
 
-    return $filePath
+    # Only sweep for retention when the date actually rolls over, not every cycle.
+    if ($script:CurrentLogDate -ne $today) {
+        if ($script:CurrentLogDate) {
+            Invoke-LogRetention -OutputFolderResolved $OutputFolderResolved -LogFilePrefix $LogFilePrefix -RetentionDays $RetentionDays
+        }
+        $script:CurrentLogDate = $today
+    }
+
+    return $csvPath
+}
+
+function Invoke-LogRetention {
+    param(
+        [string]$OutputFolderResolved,
+        [string]$LogFilePrefix,
+        [int]$RetentionDays
+    )
+
+    if ($RetentionDays -le 0) { return }
+
+    try {
+        $pattern = "$LogFilePrefix`_????-??-??.csv"
+        $candidates = Get-ChildItem -LiteralPath $OutputFolderResolved -Filter $pattern -File -ErrorAction Stop
+        $toDelete = Get-LogFilesToPurge -Files $candidates -RetentionDays $RetentionDays -Now (Get-Date)
+        foreach ($file in $toDelete) {
+            try {
+                Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+                Write-Host "Deleted expired log '$($file.Name)' (older than $RetentionDays days)."
+            }
+            catch {
+                Write-Warning "Could not delete expired log '$($file.Name)': $_"
+            }
+        }
+    }
+    catch {
+        Write-Warning "Log retention sweep failed: $_"
+    }
 }
 
 # Tracks previous per-process CPU-seconds, and previous system idle/timestamp
@@ -183,7 +222,7 @@ while ($true) {
     try {
         $settings = Get-Settings -Path $ConfigPath
         $outputFolder = Resolve-OutputFolder -OutputFolder $settings.OutputFolder
-        $logFile = Get-CurrentLogFile -OutputFolderResolved $outputFolder -LogFilePrefix $settings.LogFilePrefix
+        $logFile = Update-LogFiles -OutputFolderResolved $outputFolder -LogFilePrefix $settings.LogFilePrefix -RetentionDays $settings.RetentionDays
 
         $sampleTime = Get-Date
         $timestamp = $sampleTime.ToString('yyyy-MM-ddTHH:mm:ss')
