@@ -462,7 +462,9 @@ try {
             Write-Log -Level WARN -Message "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
         }
         else {
-            Start-Sleep -Seconds $remaining
+            # -Seconds is [int] on Windows PowerShell 5.1 and would round the
+            # fractional remainder away; -Milliseconds keeps the correction exact.
+            Start-Sleep -Milliseconds ([int]($remaining * 1000))
         }
     }
 }
