@@ -13,11 +13,6 @@ param(
 
 . (Join-Path $PSScriptRoot 'ServerMonitor.Common.ps1')
 
-# Single-instance guard: "Global\" makes this apply across all sessions, so a
-# scheduled-task run and a manual interactive run can't both append to the
-# same CSV at once and interleave rows.
-$script:Mutex = New-Object System.Threading.Mutex($false, 'Global\ServerMonitorScript')
-
 $MaxConsecutiveFailures = 10
 $AlertSustainedSamples = 3
 $EventLogSource = 'ServerMonitorScript'
@@ -54,6 +49,38 @@ function Write-Log {
             # Best-effort: if the log file itself can't be written, still let the caller proceed.
             Write-Debug "Could not write to log file '$script:LogFilePath': $_"
         }
+    }
+}
+
+function New-SingleInstanceMutex {
+    <#
+    "Global\" makes the mutex apply across all sessions, so a SYSTEM-run
+    scheduled task and an interactive run can't both append to the same CSV.
+    Creating a Global\ object requires the "Create global objects" privilege,
+    which a non-admin interactive user (the -RunAsUser desktop path) may not
+    have - fall back to a session-local mutex rather than letting an
+    unhandled .NET exception kill the script before anything is logged.
+    #>
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    if (-not $PSCmdlet.ShouldProcess('ServerMonitorScript', 'Create single-instance mutex')) {
+        return $null
+    }
+
+    try {
+        return New-Object System.Threading.Mutex($false, 'Global\ServerMonitorScript')
+    }
+    catch {
+        Write-Log -Level WARN -Message "Could not create a Global mutex (requires 'Create global objects' rights): $_. Falling back to a session-local mutex, which only guards against another instance in the same session."
+    }
+
+    try {
+        return New-Object System.Threading.Mutex($false, 'Local\ServerMonitorScript')
+    }
+    catch {
+        Write-Log -Level ERROR -Message "Could not create a single-instance mutex at all: $_. Exiting."
+        exit 1
     }
 }
 
@@ -323,6 +350,20 @@ function Get-TopProcessSamples {
 
     return $combined.Values
 }
+
+# Resolve a log destination before doing anything else - including before
+# creating the mutex - so every failure from here on (bad config, mutex
+# contention, startup) lands on disk instead of only in the scheduled task's
+# hidden console. Start from the defaults in case settings.json itself is
+# missing or malformed, then switch to the real configured location once
+# Get-Settings has resolved it.
+$bootDefaults = Get-DefaultSettings
+$script:LogFilePath = Join-Path (Resolve-OutputFolder -OutputFolder $bootDefaults.OutputFolder) "$($bootDefaults.LogFilePrefix).log"
+
+$bootSettings = Get-Settings -Path $ConfigPath
+$script:LogFilePath = Join-Path (Resolve-OutputFolder -OutputFolder $bootSettings.OutputFolder) "$($bootSettings.LogFilePrefix).log"
+
+$script:Mutex = New-SingleInstanceMutex
 
 try {
     $acquired = $script:Mutex.WaitOne(0)
