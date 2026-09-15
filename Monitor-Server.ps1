@@ -175,7 +175,11 @@ function Get-TopProcessSamples {
 
 Write-Host "Server monitor starting. Config: $ConfigPath"
 
+$stopwatch = [System.Diagnostics.Stopwatch]::new()
+
 while ($true) {
+    $stopwatch.Restart()
+
     try {
         $settings = Get-Settings -Path $ConfigPath
         $outputFolder = Resolve-OutputFolder -OutputFolder $settings.OutputFolder
@@ -206,5 +210,16 @@ while ($true) {
         Write-Warning "Sample cycle failed: $_"
     }
 
-    Start-Sleep -Seconds ([int]$settings.IntervalSeconds)
+    # Sleep only what's left of the interval after the cycle's own work, so the
+    # real cadence is IntervalSeconds rather than IntervalSeconds + execution time.
+    $elapsed = $stopwatch.Elapsed.TotalSeconds
+    $intervalSeconds = if ($settings) { [int]$settings.IntervalSeconds } else { 15 }
+    $remaining = $intervalSeconds - $elapsed
+
+    if ($remaining -le 0) {
+        Write-Warning "Sample cycle took ${elapsed}s, longer than the ${intervalSeconds}s interval; sampling immediately."
+    }
+    else {
+        Start-Sleep -Seconds $remaining
+    }
 }
