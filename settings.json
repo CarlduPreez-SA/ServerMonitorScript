@@ -1,0 +1,6 @@
+{
+  "IntervalSeconds": 15,
+  "OutputFolder": ".\\Logs",
+  "TopNProcesses": 10,
+  "LogFilePrefix": "ServerMonitor"
+}
