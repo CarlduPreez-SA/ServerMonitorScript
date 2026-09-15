@@ -32,11 +32,20 @@ Runs in the foreground; stop with Ctrl+C.
 ## Running unattended (Scheduled Task)
 
 ```powershell
+# Service mode (default): runs at startup as SYSTEM. Requires an elevated prompt.
 .\Install-ScheduledTask.ps1
 Start-ScheduledTask -TaskName 'ServerMonitorScript'
+
+# Desktop/dev mode: runs at logon as the current interactive user. No elevation needed.
+.\Install-ScheduledTask.ps1 -RunAsUser
 ```
 
-Registers a task that starts at logon and restarts automatically if it stops.
+Running as SYSTEM isn't just about surviving before/without a logon — `Get-Process` can't
+read `.CPU` for processes owned by other users unless the caller is elevated, so an
+interactive, non-admin task silently under-reports CPU on a multi-user or RDP box. SYSTEM
+mode avoids that. The registered task restarts automatically on failure and refuses a
+second concurrent instance (`-MultipleInstances IgnoreNew`).
+
 Re-run `Install-ScheduledTask.ps1` after moving or editing the script to refresh the task.
 
 ## CSV schema

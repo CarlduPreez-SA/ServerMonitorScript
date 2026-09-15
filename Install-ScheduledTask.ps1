@@ -1,16 +1,33 @@
 <#
 Registers (or re-registers) a Windows Scheduled Task that runs Monitor-Server.ps1
-at logon, restarting it automatically if it ever stops. Re-run this script any
-time after editing Monitor-Server.ps1 or its location to refresh the task.
+at startup as SYSTEM, restarting it automatically if it ever stops. Running as
+SYSTEM also avoids a silent under-reporting bug: Get-Process can't read .CPU
+for processes owned by other users without elevation, so an interactive,
+non-elevated task undercounts CPU on a multi-user box.
+
+Pass -RunAsUser for desktop/dev use: runs at logon under the current
+interactive user instead of SYSTEM (no elevation required, no cross-user
+process visibility).
+
+Re-run this script any time after editing Monitor-Server.ps1 or moving it, to
+refresh the task.
 #>
 
 param(
     [string]$TaskName = 'ServerMonitorScript',
-    [string]$ScriptPath = (Join-Path $PSScriptRoot 'Monitor-Server.ps1')
+    [string]$ScriptPath = (Join-Path $PSScriptRoot 'Monitor-Server.ps1'),
+    [switch]$RunAsUser
 )
 
 if (-not (Test-Path -LiteralPath $ScriptPath)) {
     throw "Monitor script not found at '$ScriptPath'."
+}
+
+if (-not $RunAsUser) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        throw "Registering the SYSTEM-mode scheduled task requires an elevated (Run as Administrator) PowerShell session. Either re-run elevated, or pass -RunAsUser to install the desktop/dev variant under the current user instead."
+    }
 }
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -22,20 +39,28 @@ if ($existing) {
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`""
 
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-
 $settings = New-ScheduledTaskSettingsSet `
     -RestartCount 999 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
-    -StartWhenAvailable
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew
 
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+if ($RunAsUser) {
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+    $modeDescription = "at logon as $env:USERNAME (desktop/dev mode)"
+}
+else {
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $modeDescription = 'at startup as SYSTEM (service mode)'
+}
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
     -Description 'Continuously logs system and per-process CPU/RAM usage to CSV.' | Out-Null
 
-Write-Host "Scheduled task '$TaskName' registered to run at logon for $env:USERNAME."
+Write-Host "Scheduled task '$TaskName' registered to run $modeDescription."
 Write-Host "Start it now with: Start-ScheduledTask -TaskName '$TaskName'"
