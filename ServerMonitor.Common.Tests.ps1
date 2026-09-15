@@ -149,6 +149,20 @@ Describe 'Test-ShouldSweepLogRetention' {
     }
 }
 
+Describe 'Test-LogFileRolloverNeeded' {
+    It 'is false when the file is under the threshold' {
+        Test-LogFileRolloverNeeded -SizeBytes 1000 -ThresholdBytes 5000 | Should -Be $false
+    }
+
+    It 'is true once the file reaches the threshold' {
+        Test-LogFileRolloverNeeded -SizeBytes 5000 -ThresholdBytes 5000 | Should -Be $true
+    }
+
+    It 'is true once the file exceeds the threshold' {
+        Test-LogFileRolloverNeeded -SizeBytes 9000 -ThresholdBytes 5000 | Should -Be $true
+    }
+}
+
 Describe 'Get-LogFilesToPurge' {
     It 'selects only files older than the retention window' {
         $now = Get-Date '2026-09-15T00:00:00'

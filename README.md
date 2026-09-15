@@ -85,7 +85,9 @@ phantom spike.
 
 A `<OutputFolder>\<LogFilePrefix>.log` file also accumulates warnings/errors (config
 problems, failed cycles, retention deletions, alert breaches) — useful since the scheduled
-task runs with a hidden window and nothing goes to a visible console.
+task runs with a hidden window and nothing goes to a visible console. Unlike the dated
+CSVs, this file has no natural rollover, so it's size-capped instead: once it reaches 5 MB
+it's rolled to `<LogFilePrefix>.log.1` (one prior copy kept) and a fresh file started.
 
 ## Log retention
 

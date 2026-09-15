@@ -14,6 +14,7 @@ param(
 . (Join-Path $PSScriptRoot 'ServerMonitor.Common.ps1')
 
 $MaxConsecutiveFailures = 10
+$MaxLogFileSizeBytes = 5MB
 $AlertSustainedSamples = 3
 $EventLogSource = 'ServerMonitorScript'
 $EventLogName = 'Application'
@@ -43,12 +44,35 @@ function Write-Log {
 
     if ($script:LogFilePath) {
         try {
+            Invoke-LogFileRollover -Path $script:LogFilePath
             Add-Content -LiteralPath $script:LogFilePath -Value $line -Encoding UTF8
         }
         catch {
             # Best-effort: if the log file itself can't be written, still let the caller proceed.
             Write-Debug "Could not write to log file '$script:LogFilePath': $_"
         }
+    }
+}
+
+function Invoke-LogFileRollover {
+    <#
+    Unlike the dated CSVs, the warnings/errors log has no natural retention -
+    it's the same file forever. Roll it over once it crosses
+    $MaxLogFileSizeBytes, keeping one prior copy (<name>.log.1).
+    #>
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    try {
+        $size = (Get-Item -LiteralPath $Path -ErrorAction Stop).Length
+        if (Test-LogFileRolloverNeeded -SizeBytes $size -ThresholdBytes $MaxLogFileSizeBytes) {
+            Move-Item -LiteralPath $Path -Destination "$Path.1" -Force
+        }
+    }
+    catch {
+        # Best-effort: a rollover failure shouldn't block logging.
+        Write-Debug "Log file rollover failed for '$Path': $_"
     }
 }
 

@@ -232,6 +232,23 @@ function Test-ShouldSweepLogRetention {
     return $CurrentLogDate -ne $Today
 }
 
+function Test-LogFileRolloverNeeded {
+    <#
+    True once a file has reached ThresholdBytes. Backs size-based rollover
+    for the warnings/errors log, which (unlike the dated CSVs) has no
+    natural retention of its own and would otherwise grow unbounded - e.g.
+    an intermittent WMI fault that logs a warning every cycle without ever
+    hitting the consecutive-failure limit.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][long]$SizeBytes,
+        [Parameter(Mandatory)][long]$ThresholdBytes
+    )
+
+    return $SizeBytes -ge $ThresholdBytes
+}
+
 function Get-LogFilesToPurge {
     <#
     Selects log files older than RetentionDays for deletion. RetentionDays -le 0
