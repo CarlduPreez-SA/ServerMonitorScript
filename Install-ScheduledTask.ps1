@@ -1,3 +1,4 @@
+#Requires -Version 5.1
 <#
 Registers (or re-registers) a Windows Scheduled Task that runs Monitor-Server.ps1
 at startup as SYSTEM, restarting it automatically if it ever stops. Running as
@@ -13,6 +14,7 @@ Re-run this script any time after editing Monitor-Server.ps1 or moving it, to
 refresh the task.
 #>
 
+[CmdletBinding()]
 param(
     [string]$TaskName = 'ServerMonitorScript',
     [string]$ScriptPath = (Join-Path $PSScriptRoot 'Monitor-Server.ps1'),
@@ -32,7 +34,7 @@ if (-not $RunAsUser) {
 
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "Existing task '$TaskName' found. Unregistering before re-creating."
+    Write-Information "Existing task '$TaskName' found. Unregistering before re-creating." -InformationAction Continue
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
@@ -62,5 +64,5 @@ else {
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
     -Description 'Continuously logs system and per-process CPU/RAM usage to CSV.' | Out-Null
 
-Write-Host "Scheduled task '$TaskName' registered to run $modeDescription."
-Write-Host "Start it now with: Start-ScheduledTask -TaskName '$TaskName'"
+Write-Information "Scheduled task '$TaskName' registered to run $modeDescription." -InformationAction Continue
+Write-Information "Start it now with: Start-ScheduledTask -TaskName '$TaskName'" -InformationAction Continue

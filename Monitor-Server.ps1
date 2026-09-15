@@ -1,3 +1,4 @@
+#Requires -Version 5.1
 <#
 Continuously samples system-wide CPU/RAM and per-process CPU/RAM usage,
 writing structured rows to a date-rotated CSV file. Configuration is
@@ -5,6 +6,7 @@ read from settings.json (next to this script) and re-read every cycle
 so changes (e.g. IntervalSeconds) take effect without a restart.
 #>
 
+[CmdletBinding()]
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'settings.json')
 )
@@ -41,7 +43,7 @@ function Write-Log {
     switch ($Level) {
         'ERROR' { Write-Error $Message -ErrorAction Continue }
         'WARN' { Write-Warning $Message }
-        default { Write-Host $line }
+        default { Write-Information $line -InformationAction Continue }
     }
 
     if ($script:LogFilePath) {
@@ -50,6 +52,7 @@ function Write-Log {
         }
         catch {
             # Best-effort: if the log file itself can't be written, still let the caller proceed.
+            Write-Debug "Could not write to log file '$script:LogFilePath': $_"
         }
     }
 }
@@ -96,6 +99,7 @@ $CsvHeader = 'Timestamp,MetricType,ProcessName,ProcessId,CPUPercent,MemoryMB,Mem
 $script:CurrentLogDate = $null
 
 function Update-LogFiles {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$OutputFolderResolved,
         [string]$LogFilePrefix,
@@ -108,7 +112,9 @@ function Update-LogFiles {
     $script:LogFilePath = Join-Path $OutputFolderResolved "$LogFilePrefix.log"
 
     if (-not (Test-Path -LiteralPath $csvPath)) {
-        Set-Content -LiteralPath $csvPath -Value $CsvHeader -Encoding UTF8
+        if ($PSCmdlet.ShouldProcess($csvPath, 'Create CSV log file with header')) {
+            Set-Content -LiteralPath $csvPath -Value $CsvHeader -Encoding UTF8
+        }
     }
 
     # Only sweep for retention when the date actually rolls over, not every cycle.
@@ -273,6 +279,7 @@ function Get-TopProcessSamples {
             $startTicks = $proc.StartTime.Ticks
         }
         catch {
+            # Idle/System and some protected processes don't expose StartTime - skip CPU-delta tracking for them.
             $startTicks = $null
         }
         $key = Get-ProcessSampleKey -ProcessId $proc.Id -StartTimeTicks $startTicks
