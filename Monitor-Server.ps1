@@ -67,8 +67,10 @@ function Get-CurrentLogFile {
     return $filePath
 }
 
-# Tracks previous per-process CPU-seconds so CPU% can be computed as a delta over the sample interval.
+# Tracks previous per-process CPU-seconds, and previous system idle/timestamp
+# raw counters, so CPU% can be computed as a delta over the sample interval.
 $script:PreviousProcessCpu = @{}
+$script:PreviousSystemRaw = $null
 $script:PreviousSampleTime = $null
 
 function Get-SystemSample {
@@ -78,8 +80,20 @@ function Get-SystemSample {
     $usedMemMB = [math]::Round($totalMemMB - $freeMemMB, 2)
     $usedMemPct = if ($totalMemMB -gt 0) { [math]::Round(($usedMemMB / $totalMemMB) * 100, 2) } else { 0 }
 
-    $cpuCounter = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
-    $cpuPct = [math]::Round($cpuCounter.PercentProcessorTime, 2)
+    # Raw (not pre-formatted) counters, diffed the same way as per-process CPU,
+    # so the two CPUPercent figures in the CSV are directly comparable instead
+    # of coming from two different counter families that don't reconcile.
+    $raw = Get-CimInstance -ClassName Win32_PerfRawData_PerfOS_Processor -Filter "Name='_Total'"
+
+    $cpuPct = 0
+    if ($script:PreviousSystemRaw) {
+        $cpuPct = Get-SystemCpuPercentFromRaw `
+            -PreviousIdle $script:PreviousSystemRaw.PercentIdleTime `
+            -CurrentIdle $raw.PercentIdleTime `
+            -PreviousTimestamp $script:PreviousSystemRaw.Timestamp_Sys100NS `
+            -CurrentTimestamp $raw.Timestamp_Sys100NS
+    }
+    $script:PreviousSystemRaw = $raw
 
     [pscustomobject]@{
         CPUPercent      = $cpuPct

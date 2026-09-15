@@ -50,5 +50,8 @@ Timestamp,MetricType,ProcessName,ProcessId,CPUPercent,MemoryMB,MemoryPercent,Tot
   `ProcessName`, `ProcessId`, process `CPUPercent` (normalized across all cores, like Task
   Manager), `MemoryMB` (working set), `MemoryPercent` (share of total RAM). `TotalMemoryMB` blank.
 
-Per-process CPU% is computed from the delta in cumulative CPU-seconds between consecutive
-samples, so the first sample after the monitor starts reports `0` for every process.
+Both `CPUPercent` figures (system and process) are computed the same way — a delta over the
+sample interval (system: idle-time delta from raw perf counters; process: CPU-seconds delta
+from `Get-Process`) — so they're directly comparable. **The first sample after the monitor
+starts always reports `0`** for every `CPUPercent`, since there's no prior sample to diff
+against.
