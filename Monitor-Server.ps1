@@ -180,6 +180,7 @@ function Update-LogFiles {
 }
 
 function Invoke-LogRetention {
+    [CmdletBinding(SupportsShouldProcess)]
     param(
         [string]$OutputFolderResolved,
         [string]$LogFilePrefix,
@@ -193,6 +194,8 @@ function Invoke-LogRetention {
         $candidates = Get-ChildItem -LiteralPath $OutputFolderResolved -Filter $pattern -File -ErrorAction Stop
         $toDelete = Get-LogFilesToPurge -Files $candidates -RetentionDays $RetentionDays -Now (Get-Date)
         foreach ($file in $toDelete) {
+            if (-not $PSCmdlet.ShouldProcess($file.FullName, 'Delete expired log file')) { continue }
+
             try {
                 Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
                 Write-Log -Level INFO -Message "Deleted expired log '$($file.Name)' (older than $RetentionDays days)."
