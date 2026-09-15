@@ -9,35 +9,27 @@ param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'settings.json')
 )
 
-$DefaultSettings = [pscustomobject]@{
-    IntervalSeconds  = 15
-    OutputFolder     = '.\Logs'
-    TopNProcesses    = 10
-    LogFilePrefix    = 'ServerMonitor'
-}
+. (Join-Path $PSScriptRoot 'ServerMonitor.Common.ps1')
 
 function Get-Settings {
     param([string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path)) {
         Write-Warning "Config file not found at '$Path'. Using default settings."
-        return $DefaultSettings
+        return (Get-DefaultSettings)
     }
 
     try {
         $raw = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-
-        $settings = $DefaultSettings.PSObject.Copy()
-        foreach ($prop in $DefaultSettings.PSObject.Properties.Name) {
-            if ($raw.PSObject.Properties.Name -contains $prop -and $null -ne $raw.$prop -and "$($raw.$prop)" -ne '') {
-                $settings.$prop = $raw.$prop
-            }
+        $validated = ConvertTo-ValidatedSettings -RawSettings $raw
+        foreach ($w in $validated.Warnings) {
+            Write-Warning "Config: $w"
         }
-        return $settings
+        return $validated.Settings
     }
     catch {
         Write-Warning "Failed to parse config file '$Path': $_. Using default settings."
-        return $DefaultSettings
+        return (Get-DefaultSettings)
     }
 }
 
@@ -57,26 +49,6 @@ function Resolve-OutputFolder {
 }
 
 $CsvHeader = 'Timestamp,MetricType,ProcessName,ProcessId,CPUPercent,MemoryMB,MemoryPercent,TotalMemoryMB'
-
-function ConvertTo-CsvField {
-    param([string]$Value)
-
-    if ($null -eq $Value) { return '' }
-    if ($Value -match '[",\r\n]') {
-        return '"' + ($Value -replace '"', '""') + '"'
-    }
-    return $Value
-}
-
-function Write-CsvRow {
-    param(
-        [string]$FilePath,
-        [string[]]$Fields
-    )
-
-    $line = ($Fields | ForEach-Object { ConvertTo-CsvField $_ }) -join ','
-    Add-Content -LiteralPath $FilePath -Value $line -Encoding UTF8
-}
 
 function Get-CurrentLogFile {
     param(
@@ -181,18 +153,22 @@ while ($true) {
         $timestamp = $sampleTime.ToString('yyyy-MM-ddTHH:mm:ss')
 
         $sysSample = Get-SystemSample
-        Write-CsvRow -FilePath $logFile -Fields @(
+        $topProcesses = Get-TopProcessSamples -TopN ([int]$settings.TopNProcesses) -TotalMemoryMB $sysSample.TotalMemoryMB -SampleTime $sampleTime
+
+        # Batch the cycle's rows into one write instead of opening/closing the
+        # file handle once per row.
+        $rows = New-Object System.Collections.Generic.List[string]
+        $rows.Add((ConvertTo-CsvLine -Fields @(
             $timestamp, 'System', '', '',
             $sysSample.CPUPercent, $sysSample.MemoryUsedMB, $sysSample.MemoryUsedPct, $sysSample.TotalMemoryMB
-        )
-
-        $topProcesses = Get-TopProcessSamples -TopN ([int]$settings.TopNProcesses) -TotalMemoryMB $sysSample.TotalMemoryMB -SampleTime $sampleTime
+        )))
         foreach ($p in $topProcesses) {
-            Write-CsvRow -FilePath $logFile -Fields @(
+            $rows.Add((ConvertTo-CsvLine -Fields @(
                 $timestamp, 'Process', $p.ProcessName, $p.ProcessId,
                 $p.CPUPercent, $p.MemoryMB, $p.MemoryPercent, ''
-            )
+            )))
         }
+        Add-Content -LiteralPath $logFile -Value $rows -Encoding UTF8
     }
     catch {
         Write-Warning "Sample cycle failed: $_"
