@@ -18,6 +18,8 @@ per-process CPU/RAM usage, writing structured rows to a date-rotated CSV file.
 | `TopNProcesses`   | Number of top processes by CPU and by RAM logged per sample.        | `10`           |
 | `LogFilePrefix`   | Prefix for daily CSV file names (`<Prefix>_yyyy-MM-dd.csv`).         | `ServerMonitor`|
 | `RetentionDays`   | Delete CSV files older than this many days on each date rollover. `0` = keep forever. | `14` |
+| `CpuAlertPercent` | System CPU% threshold. `null` disables. See Alerting below.          | `null`         |
+| `MemoryAlertPercent` | System memory% threshold. `null` disables.                        | `null`         |
 
 ## Running manually
 
@@ -66,6 +68,17 @@ a hidden window and nothing goes to a visible console.
 On each day's first sample, the monitor deletes CSV files older than `RetentionDays` in
 `OutputFolder`. Set `RetentionDays` to `0` to keep every file forever. A locked or
 otherwise undeletable file is logged and skipped rather than stopping the monitor.
+
+## Alerting
+
+Set `CpuAlertPercent` and/or `MemoryAlertPercent` (0–100) to get a warning-level entry in
+the Windows **Application** event log (source `ServerMonitorScript`, event ID `1001` for
+CPU / `1002` for memory) when the corresponding metric stays at or above the threshold for
+3 consecutive samples. This is a single sustained-breach notification, not a fire-every-cycle
+alarm, and not a substitute for real alerting/paging — see "When not to use this" below.
+
+Creating the event log source requires admin rights once; if that fails (e.g. desktop mode,
+non-elevated), alerts still land in `<LogFilePrefix>.log` but skip the event log.
 
 ## Failure handling
 

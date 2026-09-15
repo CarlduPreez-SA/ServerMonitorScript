@@ -17,6 +17,11 @@ param(
 $script:Mutex = New-Object System.Threading.Mutex($false, 'Global\ServerMonitorScript')
 
 $MaxConsecutiveFailures = 10
+$AlertSustainedSamples = 3
+$EventLogSource = 'ServerMonitorScript'
+$EventLogName = 'Application'
+$EventIdCpuAlert = 1001
+$EventIdMemoryAlert = 1002
 
 $script:LogFilePath = $null
 
@@ -150,6 +155,67 @@ function Invoke-LogRetention {
 $script:PreviousProcessCpu = @{}
 $script:PreviousSystemRaw = $null
 $script:PreviousSampleTime = $null
+
+# Sustained-breach tracking for alerting (avoid firing on a single noisy sample).
+$script:ConsecutiveCpuBreaches = 0
+$script:ConsecutiveMemoryBreaches = 0
+$script:EventLogAvailable = $null
+
+function Test-EventLogAvailable {
+    if ($null -ne $script:EventLogAvailable) { return $script:EventLogAvailable }
+
+    try {
+        if (-not [System.Diagnostics.EventLog]::SourceExists($EventLogSource)) {
+            New-EventLog -LogName $EventLogName -Source $EventLogSource -ErrorAction Stop
+        }
+        $script:EventLogAvailable = $true
+    }
+    catch {
+        Write-Log -Level WARN -Message "Event log source '$EventLogSource' unavailable (requires admin to create once): $_. Alerts will only be written to the log file."
+        $script:EventLogAvailable = $false
+    }
+
+    return $script:EventLogAvailable
+}
+
+function Invoke-AlertCheck {
+    <#
+    Fires a single warning-level Application event log entry (and log-file
+    entry) once CPU or memory has stayed at or above its threshold for
+    $AlertSustainedSamples consecutive samples, rather than on every cycle a
+    single noisy sample happens to breach it.
+    #>
+    param(
+        [double]$CpuPercent,
+        [double]$MemoryPercent,
+        [Nullable[double]]$CpuAlertPercent,
+        [Nullable[double]]$MemoryAlertPercent
+    )
+
+    if ($CpuAlertPercent) {
+        if ($CpuPercent -ge $CpuAlertPercent) { $script:ConsecutiveCpuBreaches++ } else { $script:ConsecutiveCpuBreaches = 0 }
+
+        if ($script:ConsecutiveCpuBreaches -eq $AlertSustainedSamples) {
+            $msg = "Sustained high CPU: $CpuPercent% over the last $AlertSustainedSamples samples (threshold $CpuAlertPercent%)."
+            Write-Log -Level WARN -Message $msg
+            if (Test-EventLogAvailable) {
+                Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdCpuAlert -EntryType Warning -Message $msg
+            }
+        }
+    }
+
+    if ($MemoryAlertPercent) {
+        if ($MemoryPercent -ge $MemoryAlertPercent) { $script:ConsecutiveMemoryBreaches++ } else { $script:ConsecutiveMemoryBreaches = 0 }
+
+        if ($script:ConsecutiveMemoryBreaches -eq $AlertSustainedSamples) {
+            $msg = "Sustained high memory: $MemoryPercent% over the last $AlertSustainedSamples samples (threshold $MemoryAlertPercent%)."
+            Write-Log -Level WARN -Message $msg
+            if (Test-EventLogAvailable) {
+                Write-EventLog -LogName $EventLogName -Source $EventLogSource -EventId $EventIdMemoryAlert -EntryType Warning -Message $msg
+            }
+        }
+    }
+}
 
 function Get-SystemSample {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -298,6 +364,9 @@ try {
                 )))
             }
             Add-Content -LiteralPath $logFile -Value $rows -Encoding UTF8
+
+            Invoke-AlertCheck -CpuPercent $sysSample.CPUPercent -MemoryPercent $sysSample.MemoryUsedPct `
+                -CpuAlertPercent $settings.CpuAlertPercent -MemoryAlertPercent $settings.MemoryAlertPercent
 
             $consecutiveFailures = 0
         }

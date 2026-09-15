@@ -3,5 +3,7 @@
   "OutputFolder": ".\\Logs",
   "TopNProcesses": 10,
   "LogFilePrefix": "ServerMonitor",
-  "RetentionDays": 14
+  "RetentionDays": 14,
+  "CpuAlertPercent": null,
+  "MemoryAlertPercent": null
 }
