@@ -105,14 +105,32 @@ function Get-TopProcessSamples {
     $processes = Get-Process -ErrorAction SilentlyContinue
     $currentCpu = @{}
     $samples = foreach ($proc in $processes) {
+        # Key CPU tracking by PID *and* start time - PID alone can be recycled
+        # between samples, which would diff a new process's CPU-seconds
+        # against an unrelated old process's baseline and produce a phantom
+        # spike. Idle/System and some protected processes don't expose
+        # StartTime; skip CPU-delta tracking for those rather than throwing.
+        $startTicks = $null
+        try {
+            $startTicks = $proc.StartTime.Ticks
+        }
+        catch {
+            $startTicks = $null
+        }
+        $key = Get-ProcessSampleKey -ProcessId $proc.Id -StartTimeTicks $startTicks
+
         $cpuSeconds = $proc.CPU
-        $currentCpu[$proc.Id] = $cpuSeconds
+        if ($null -ne $cpuSeconds) {
+            $currentCpu[$key] = $cpuSeconds
+        }
 
         $cpuPercent = 0
-        if ($elapsedSeconds -and $elapsedSeconds -gt 0 -and $null -ne $cpuSeconds -and $script:PreviousProcessCpu.ContainsKey($proc.Id)) {
-            $deltaCpu = $cpuSeconds - $script:PreviousProcessCpu[$proc.Id]
-            if ($deltaCpu -lt 0) { $deltaCpu = 0 }
-            $cpuPercent = [math]::Round(($deltaCpu / $elapsedSeconds / $processorCount) * 100, 2)
+        if ($elapsedSeconds -and $elapsedSeconds -gt 0 -and $null -ne $cpuSeconds -and $script:PreviousProcessCpu.ContainsKey($key)) {
+            $cpuPercent = Get-ProcessCpuPercent `
+                -PreviousCpuSeconds $script:PreviousProcessCpu[$key] `
+                -CurrentCpuSeconds $cpuSeconds `
+                -ElapsedSeconds $elapsedSeconds `
+                -ProcessorCount $processorCount
         }
 
         $memMB = [math]::Round($proc.WorkingSet64 / 1MB, 2)
